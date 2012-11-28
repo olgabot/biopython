@@ -87,12 +87,15 @@ class EmbossIterator(AlignmentIterator):
         number_of_seqs = None
         ids = []
         seqs = []
-
+        annotations = []
+        annot = {}
 
         while line[0] == "#":
             #Read in the rest of this alignment header,
             #try and discover the number of records expected
             #and their length
+
+            # Initialize empty annotations dictionary
             parts = line[1:].split(":",1)
             key = parts[0].lower().strip()
             if key == "aligned_sequences":
@@ -105,8 +108,40 @@ class EmbossIterator(AlignmentIterator):
                     assert i+1 == int(parts[0].strip())
                     ids.append(parts[1].strip())
                 assert len(ids) == number_of_seqs
+                # Now read in the residue score matrix used, the gap penalty,
+                # and the extend penalty.
+                for i in range(3):
+                    line = handle.readline()
+                    parts = line[2:].split(": ", 1)
+                    if parts[0] == 'Matrix':
+                        annot[parts[0].lower()] = parts[1].strip()
+                    else:
+                        annot[parts[0].lower()] = float(parts[1])
             if key == "length":
                 length_of_seqs = int(parts[1].strip())
+                # Should now expect the sequence identity, similarity, 
+                # gaps, and score values
+                for i in range(3):
+                    line = handle.readline()
+                    parts = line[2:].split(":", 1)
+                    fraction = parts[1].split()[0].split('/')
+                    annot[parts[0].lower()+'_numerator'] = int(fraction[0])
+                    annot[parts[0].lower()+'_denominator'] = int(fraction[1])
+                    annot[parts[0].lower()] = float(fraction[0])/float(fraction[1])
+                # Now we've read the identity, similiarity, and gap lines.
+                # Next is the score.
+                line = handle.readline()
+                parts = line[2:].split(": ", 1)
+                annot[parts[0].lower()] = float(parts[1])
+
+                # We have all the annotations we're going to get (matrix, gap_penalty,
+                # extend_penalty, identity, similarity, gaps, score), so now we need to
+                # add as many annotations as we have sequences, because BioPython doesn't
+                # have the option to have an annotation for a MultipleSequenceAlignment
+                # object, only for SeqRecords themselves
+                for i in range(number_of_seqs):
+                    annotations.append(annot)
+                annot = {}
 
             #And read in another line...
             line = handle.readline()
@@ -205,7 +240,7 @@ class EmbossIterator(AlignmentIterator):
                              % (len(ids), self.records_per_alignment))
 
         records = []
-        for id, seq in zip(ids, seqs):
+        for id, seq, annot in zip(ids, seqs, annotations):
             if len(seq) != length_of_seqs:
                 #EMBOSS 2.9.0 is known to use spaces instead of minus signs
                 #for leading gaps, and thus fails to parse.  This old version
@@ -215,7 +250,8 @@ class EmbossIterator(AlignmentIterator):
                                  "different length? You could be using an "
                                  "old version of EMBOSS.")
             records.append(SeqRecord(Seq(seq, self.alphabet), \
-                                     id=id, description=id))
+                                     id=id, description=id, \
+                                     annotations=annot))
         return MultipleSeqAlignment(records, self.alphabet)
 
 
@@ -585,12 +621,28 @@ asis             311 -----------------    311
     assert len(alignments[0]) == 2
     assert [r.id for r in alignments[0]] \
            == ["IXI_234", "IXI_235"]
-    
+    assert alignments[0][0].annotations['matrix'] == 'EBLOSUM62'
+    assert alignments[0][0].annotations['gap_penalty'] == 10.0
+    assert alignments[0][0].annotations['extend_penalty'] == 0.5
+    assert alignments[0][0].annotations['identity_numerator'] == 112
+    assert alignments[0][0].annotations['identity_denominator'] == 131
+    assert alignments[0][0].annotations['similarity_numerator'] == 112
+    assert alignments[0][0].annotations['gaps_numerator'] == 19
+    assert alignments[0][0].annotations['score'] == 591.5
+
     alignments = list(EmbossIterator(StringIO(simple_example)))
     assert len(alignments) == 1    
     assert len(alignments[0]) == 4
     assert [r.id for r in alignments[0]] \
            == ["IXI_234", "IXI_235", "IXI_236", "IXI_237"]
+    assert alignments[0][0].annotations['matrix'] == 'EBLOSUM62'
+    assert alignments[0][0].annotations['gap_penalty'] == 10.0
+    assert alignments[0][0].annotations['extend_penalty'] == 0.5
+    assert alignments[0][0].annotations['identity_numerator'] == 95
+    assert alignments[0][0].annotations['identity_denominator'] == 131
+    assert alignments[0][0].annotations['similarity_numerator'] == 127
+    assert alignments[0][0].annotations['gaps_numerator'] == 25
+    assert alignments[0][0].annotations['score'] == 100.0
 
     alignments = list(EmbossIterator(StringIO(pair_example + simple_example)))
     assert len(alignments) == 2    
@@ -600,6 +652,14 @@ asis             311 -----------------    311
            == ["IXI_234", "IXI_235"]
     assert [r.id for r in alignments[1]] \
            == ["IXI_234", "IXI_235", "IXI_236", "IXI_237"]
+    assert alignments[0][0].annotations['matrix'] == 'EBLOSUM62'
+    assert alignments[0][0].annotations['gap_penalty'] == 10.0
+    assert alignments[0][0].annotations['extend_penalty'] == 0.5
+    assert alignments[0][0].annotations['identity_numerator'] == 112
+    assert alignments[0][0].annotations['identity_denominator'] == 131
+    assert alignments[0][0].annotations['similarity_numerator'] == 112
+    assert alignments[0][0].annotations['gaps_numerator'] == 19
+    assert alignments[0][0].annotations['score'] == 591.5
 
     alignments = list(EmbossIterator(StringIO(pair_example2)))
     assert len(alignments) == 5
@@ -608,6 +668,23 @@ asis             311 -----------------    311
            == ["ref_rec", "gi|94968718|receiver"]
     assert [r.id for r in alignments[4]] \
            == ["ref_rec", "gi|94970041|receiver"]
+    assert alignments[0][0].annotations['matrix'] == 'EBLOSUM62'
+    assert alignments[0][0].annotations['gap_penalty'] == 10.0
+    assert alignments[0][0].annotations['extend_penalty'] == 0.5
+    assert alignments[0][0].annotations['identity_numerator'] == 32
+    assert alignments[0][0].annotations['identity_denominator'] == 124
+    assert alignments[0][0].annotations['similarity_numerator'] == 64
+    assert alignments[0][0].annotations['gaps_numerator'] == 17
+    assert alignments[0][0].annotations['score'] == 112.0
+    assert alignments[4][0].annotations['matrix'] == 'EBLOSUM62'
+    assert alignments[4][0].annotations['gap_penalty'] == 10.0
+    assert alignments[4][0].annotations['extend_penalty'] == 0.5
+    assert alignments[4][0].annotations['identity_numerator'] == 35
+    assert alignments[4][0].annotations['identity_denominator'] == 125
+    assert alignments[4][0].annotations['similarity_numerator'] == 70
+    assert alignments[4][0].annotations['gaps_numerator'] == 18
+    assert alignments[4][0].annotations['score'] == 156.5
+
 
 
     alignments = list(EmbossIterator(StringIO(pair_example3)))
@@ -615,5 +692,14 @@ asis             311 -----------------    311
     assert len(alignments[0]) == 2
     assert [r.id for r in alignments[0]] \
            == ["asis","asis"]
+    assert alignments[0][0].annotations['matrix'] == 'EDNAFULL'
+    assert alignments[0][0].annotations['extend_penalty'] == 0.5
+    assert alignments[0][0].annotations['gap_penalty'] == 10.0
+    assert alignments[0][0].annotations['identity_numerator'] == 210
+    assert alignments[0][0].annotations['identity_denominator'] == 667
+    assert alignments[0][0].annotations['similarity_numerator'] == 210
+    assert alignments[0][0].annotations['gaps_numerator'] == 408
+    assert alignments[0][0].annotations['score'] == 561.0
+
 
     print "Done"
